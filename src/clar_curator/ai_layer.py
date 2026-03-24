@@ -14,7 +14,7 @@ import os
 import anthropic
 from pydantic import BaseModel
 
-from clar_curator.generator.clar_generator import IntegrationSpec
+from clar_curator.generator.clar_generator import IntegrationSpec, LaunchParam, ServiceAttribute
 
 
 # ---------------------------------------------------------------------------
@@ -27,16 +27,36 @@ class FieldMapping(BaseModel):
     transform: str = ""
 
 
+class LaunchParamSchema(BaseModel):
+    name: str
+    type: str = "text"
+    default_wid: str = ""
+    default_desc: str = ""
+
+
+class ServiceAttributeSchema(BaseModel):
+    name: str
+    type: str = "text"
+    display_as_password: bool = False
+    required_for_launch: bool = False
+
+
 class IntegrationSpecSchema(BaseModel):
     name: str
-    description: str
-    version: str
-    source_system: str
-    target_system: str
-    field_mappings: list[FieldMapping]
-    xslt: str
-    delivery_type: str
-    delivery_config: dict
+    description: str = ""
+    author: str = ""
+    assembly_version: str = "2021.51"
+    int_sys_name: str = ""
+    attribute_map_service_name: str = ""
+    launch_params: list[LaunchParamSchema] = []
+    attributes: list[ServiceAttributeSchema] = []
+    xslt: str = ""
+    source_system: str = ""
+    target_system: str = ""
+    version: str = "1.0"
+    field_mappings: list[FieldMapping] = []
+    delivery_type: str = "HTTPS"
+    delivery_config: dict = {}
 
 
 SYSTEM_PROMPT = """You are an expert Workday Studio integration developer.
@@ -45,13 +65,24 @@ Your task is to analyse a design document and extract a structured integration
 specification that can be used to auto-generate a Workday Studio .clar file.
 
 Rules:
-- Extract the integration name, source system, target system, and all field
-  mappings with any transformation logic described.
-- If the design doc describes XSLT, include the full XSLT string in the `xslt`
-  field; otherwise leave it empty.
-- For `delivery_type` choose one of: SFTP, FTP, FTPS, HTTPS, EIB.
-- For `delivery_config` include any host, port, path, credentials placeholder,
-  or scheduling info mentioned in the doc.
+- `name`: use underscores, no spaces (e.g. "Greenhouse_Hire_Inbound").
+- `int_sys_name`: the full integration system name as it appears in Workday
+  (e.g. "INT042 STU Greenhouse Hire Inbound"). Include the INT number and
+  tenant prefix if mentioned, otherwise infer a sensible default.
+- `attribute_map_service_name`: the named attribute-map service (e.g.
+  "Greenhouse-Connection"). Infer from the design doc or default to
+  "{name}-Connection".
+- `launch_params`: list all launch parameters (date ranges, filters, etc.).
+  For each include name, type (text/date/boolean/number), and optionally
+  default_wid / default_desc if a Workday class-report-field default is
+  described.
+- `attributes`: list all connection/config attributes on the attribute-map
+  service. Set display_as_password=true for secrets/tokens/passwords, and
+  required_for_launch=true for credentials needed at runtime.
+- `xslt`: include the full XSLT string only if the design doc explicitly
+  describes XSLT transformation logic; otherwise leave empty.
+- `delivery_type`: one of SFTP, FTP, FTPS, HTTPS, EIB.
+- `delivery_config`: any host, port, path, or scheduling info from the doc.
 - If information is missing or ambiguous, use sensible Workday Studio defaults
   and note the assumption in `description`.
 - Return ONLY valid JSON — no prose, no markdown fences.
@@ -104,11 +135,33 @@ def extract_spec(document_text: str, *, model: str = "claude-opus-4-6") -> Integ
     return IntegrationSpec(
         name=parsed.name,
         description=parsed.description,
-        version=parsed.version,
+        author=parsed.author,
+        assembly_version=parsed.assembly_version,
+        int_sys_name=parsed.int_sys_name,
+        attribute_map_service_name=parsed.attribute_map_service_name,
+        launch_params=[
+            LaunchParam(
+                name=p.name,
+                type=p.type,
+                default_wid=p.default_wid,
+                default_desc=p.default_desc,
+            )
+            for p in parsed.launch_params
+        ],
+        attributes=[
+            ServiceAttribute(
+                name=a.name,
+                type=a.type,
+                display_as_password=a.display_as_password,
+                required_for_launch=a.required_for_launch,
+            )
+            for a in parsed.attributes
+        ],
+        xslt=parsed.xslt,
         source_system=parsed.source_system,
         target_system=parsed.target_system,
+        version=parsed.version,
         field_mappings=[m.model_dump() for m in parsed.field_mappings],
-        xslt=parsed.xslt,
         delivery_type=parsed.delivery_type,
         delivery_config=parsed.delivery_config,
     )
