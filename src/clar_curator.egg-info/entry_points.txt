@@ -1,0 +1,2 @@
+[console_scripts]
+clar-curator = clar_curator.cli:main
